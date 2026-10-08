@@ -1224,6 +1224,51 @@ describe("ChatMarkdown math", () => {
     });
   });
 
+  it("copies a file link with math in its label as the link, its label text as text, and the formula as TeX", async () => {
+    settingsOverrides.mathRenderingEnabled = true;
+    const view = await renderMath("See [Report \\(x\\) notes](/tmp/project/src/main.ts).");
+    try {
+      const link = view.container.querySelector('[data-markdown-copy^="[Report"]')!;
+      const copy = (select: (range: Range) => void) => {
+        const range = document.createRange();
+        select(range);
+        const selection = { rangeCount: 1, getRangeAt: () => range } as unknown as Selection;
+        return chatMarkdownClipboardPayload(selection);
+      };
+
+      const label = copy((range) => range.selectNodeContents(link.firstChild!));
+      expect(label?.text).toBe("Report");
+      expect(label?.html).not.toContain("<code>");
+
+      const whole = copy((range) => range.selectNode(link));
+      expect(whole?.text).toBe("[Report \\(x\\) notes](/tmp/project/src/main.ts)");
+      expect(whole?.html).toContain("Report <code>\\(x\\)</code> notes");
+      expect(whole?.html).not.toMatch(/katex|annotation|<math/);
+
+      const formula = copy((range) => range.selectNodeContents(link.querySelector(".katex-html")!));
+      expect(formula?.text).toBe("\\(x\\)");
+      expect(formula?.html).toBe('<meta charset="utf-8"><code>\\(x\\)</code>');
+    } finally {
+      await view.unmount();
+      delete settingsOverrides.mathRenderingEnabled;
+    }
+  });
+
+  it("copies a table cell's file link with math in its label as its label with the TeX", async () => {
+    settingsOverrides.mathRenderingEnabled = true;
+    const view = await renderMath(
+      "| File |\n|---|\n| [Report \\(x\\) notes](/tmp/project/src/main.ts) |",
+    );
+    try {
+      expect(serializeTableElementToCsv(view.container.querySelector("table")!)).toBe(
+        "File\nReport \\(x\\) notes main.ts",
+      );
+    } finally {
+      await view.unmount();
+      delete settingsOverrides.mathRenderingEnabled;
+    }
+  });
+
   it("copies table math as TeX in CSV and Markdown while ordinary cells stay as before", async () => {
     settingsOverrides.mathRenderingEnabled = true;
     const view = await renderMath(

@@ -376,14 +376,15 @@ export function serializeTableElementToCsv(table: Element): string {
 }
 
 /**
- * A rendered formula (`data-markdown-copy` around KaTeX's `.katex`) pastes as
- * its TeX source. KaTeX's visible half is `aria-hidden` and its MathML half
- * carries the TeX a second time, so neither survives into a paste target
- * without the stylesheet.
+ * A rendered formula (`data-markdown-copy` directly around KaTeX's `.katex` or
+ * `.katex-display`) pastes as its TeX source. KaTeX's visible half is
+ * `aria-hidden` and its MathML half carries the TeX a second time, so neither
+ * survives into a paste target without the stylesheet. A wrapper that merely
+ * holds a formula, like a file link with math in its label, is not one.
  */
 function mathWrapperOf(element: Element | null): Element | null {
   const wrapper = element?.closest("[data-markdown-copy]") ?? null;
-  return wrapper?.querySelector(".katex") ? wrapper : null;
+  return wrapper?.querySelector(":scope > .katex, :scope > .katex-display") ? wrapper : null;
 }
 
 function mathSourceElement(wrapper: Element): Element {
