@@ -1181,6 +1181,28 @@ describe("ChatMarkdown math", () => {
     }
   });
 
+  it("shows an unfinished display formula as source until its closing line arrives", async () => {
+    settingsOverrides.mathRenderingEnabled = true;
+    const unfinished = "Intro\n\n$$\nx = 1";
+    const streaming = await renderMath(unfinished);
+    try {
+      expect(streaming.container.querySelector(".katex")).toBeNull();
+      expect(streaming.container.querySelector("[data-markdown-math]")).toBeNull();
+      const block = streaming.container.querySelector("pre");
+      expect(block?.textContent).toContain("$$");
+      expect(block?.textContent).toContain("x = 1");
+    } finally {
+      await streaming.unmount();
+    }
+    const finished = await renderMath(`${unfinished}\n$$`);
+    try {
+      expect(finished.tex(".katex-display")).toEqual(["x = 1"]);
+    } finally {
+      await finished.unmount();
+      delete settingsOverrides.mathRenderingEnabled;
+    }
+  });
+
   it("shows the source of TeX that KaTeX rejects and copies formulas as TeX", async () => {
     settingsOverrides.mathRenderingEnabled = true;
     const view = await renderMath("Good \\(x^2\\), bad \\(\\frac{1\\).");

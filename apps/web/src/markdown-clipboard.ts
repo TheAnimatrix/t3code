@@ -350,7 +350,6 @@ export function serializeTableElementToMarkdown(table: Element): string {
 // the attribute from authored HTML.
 const MATH_SELECTOR = "[data-markdown-math]";
 
-/** The formula wrapper at or above `element`, if any. */
 export function mathWrapperOf(element: Element | null): Element | null {
   return element?.closest(MATH_SELECTOR) ?? null;
 }

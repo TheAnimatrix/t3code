@@ -5,22 +5,31 @@ import { texMathFromMarkdown, texMathSyntax } from "./markdown-math";
 
 type Node = { type: string; value?: string; children?: Node[] };
 
-/** Math nodes in document order, as `type:value`. */
-function mathIn(source: string): string[] {
-  const found: string[] = [];
+function parse(source: string): Node {
+  return fromMarkdown(source, {
+    extensions: [texMathSyntax],
+    mdastExtensions: [texMathFromMarkdown],
+  }) as Node;
+}
+
+function nodesIn(source: string, ...types: string[]): Node[] {
+  const found: Node[] = [];
   const visit = (node: Node) => {
-    if (node.type === "inlineMath" || node.type === "math")
-      found.push(`${node.type}:${node.value}`);
+    if (types.includes(node.type)) found.push(node);
     node.children?.forEach(visit);
   };
-  visit(
-    fromMarkdown(source, {
-      extensions: [texMathSyntax],
-      mdastExtensions: [texMathFromMarkdown],
-    }) as Node,
-  );
+  visit(parse(source));
   return found;
 }
+
+/** Math nodes in document order, as `type:value`. */
+const mathIn = (source: string) =>
+  nodesIn(source, "inlineMath", "math").map((node) => `${node.type}:${node.value}`);
+
+/** Values of the code nodes in document order. */
+const codeIn = (source: string) => nodesIn(source, "code").map((node) => node.value);
+
+const typesOf = (node: Node) => node.children?.map((child) => child.type);
 
 describe("TeX math syntax", () => {
   it("reads \\(…\\) inline, including TeX backslashes and underscores", () => {
@@ -66,11 +75,6 @@ describe("TeX math syntax", () => {
     ["currency", "Costs $5 and $10"],
     ["a single $", "$\nx\n$"],
     ["a citation", "see \\[1\\] and \\[2\\]"],
-    ["an unclosed display block", "\\[\nx = 1\n"],
-    ["an unclosed $$ block", "$$\nx = 1\n"],
-    ["a $$ block closed by \\]", "$$\na\n\\]"],
-    ["a \\[ block closed by $$", "\\[\na\n$$"],
-    ["a display block cut by a lazy line", "> \\[\n> x\nlazy\n> \\]"],
     ["a link target", "[a](https://x.test/\\(b\\))"],
   ])("leaves %s alone", (_, source) => {
     expect(mathIn(source)).toEqual([]);
@@ -87,8 +91,51 @@ describe("TeX math syntax", () => {
     expect(performance.now() - start).toBeLessThan(2000);
   });
 
-  it("ends an unfinished display block at the next opener", () => {
-    expect(mathIn("\\[\na\n\\[\nb\n\\]")).toEqual(["math:b"]);
+  it("keeps an opener line inside a display block as formula content", () => {
+    expect(mathIn("\\[\na\n\\[\nb\n\\]")).toEqual(["math:a\n\\[\nb"]);
+  });
+
+  it.each([
+    ["an unclosed \\[ block", "\\[\nx = 1\n", "\\[\nx = 1"],
+    ["an unclosed $$ block", "$$\nx = 1\n", "$$\nx = 1"],
+    ["a $$ block closed by \\]", "$$\na\n\\]", "$$\na\n\\]"],
+    ["a \\[ block closed by $$", "\\[\na\n$$", "\\[\na\n$$"],
+    ["a display block cut by a lazy line", "> \\[\n> x\nlazy\n> \\]", "\\[\nx"],
+    ["a display opener at the end", "text\n\n$$", "$$"],
+  ])("shows %s as source in a code node", (_, source, code) => {
+    expect(mathIn(source)).toEqual([]);
+    expect(codeIn(source)).toEqual([code]);
+  });
+
+  it.each([
+    ["\\[", "\\]"],
+    ["$$", "$$"],
+  ])("keeps the structure after a %s block", (open, close) => {
+    const closed = parse(`Intro\n${open}\nx\n${close}\n\n- a\n- b\n\n> quote`);
+    expect(typesOf(closed)).toEqual(["paragraph", "math", "list", "blockquote"]);
+  });
+
+  it.each(["\\[", "$$"])("runs an unclosed %s block to the end of the document", (open) => {
+    const source = `Intro\n${open}\n\n- a\n- b\n\n> quote`;
+    expect(typesOf(parse(source))).toEqual(["paragraph", "code"]);
+    expect(codeIn(source)).toEqual([`${open}\n\n- a\n- b\n\n> quote`]);
+    expect(codeIn(`Intro\n${open}\nx`)).toEqual([`${open}\nx`]);
+  });
+
+  it("ends an unclosed block with its list item", () => {
+    const [list, quote] = parse("- item\n  $$\n  x\n- next\n\n> quote").children!;
+    expect(typesOf(list!)).toEqual(["listItem", "listItem"]);
+    expect(typesOf(list!.children![0]!)).toEqual(["paragraph", "code"]);
+    expect(list!.children![0]!.children![1]!.value).toBe("$$\nx");
+    expect(typesOf(list!.children![1]!)).toEqual(["paragraph"]);
+    expect(quote?.type).toBe("blockquote");
+  });
+
+  it("ends an unclosed block with its blockquote", () => {
+    const tree = parse("> $$\n> x\n\nafter");
+    expect(typesOf(tree)).toEqual(["blockquote", "paragraph"]);
+    expect(typesOf(tree.children![0]!)).toEqual(["code"]);
+    expect(codeIn("> $$\n> x\n\nafter")).toEqual(["$$\nx"]);
   });
 
   it("scans a message of unmatched display openers in linear time", () => {

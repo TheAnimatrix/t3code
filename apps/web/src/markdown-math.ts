@@ -16,7 +16,14 @@ declare module "micromark-util-types" {
     texMathTextData: "texMathTextData";
     texMathFlow: "texMathFlow";
     texMathFlowFence: "texMathFlowFence";
+    texMathFlowClosingFence: "texMathFlowClosingFence";
     texMathFlowValue: "texMathFlowValue";
+  }
+}
+
+declare module "mdast-util-from-markdown" {
+  interface CompileData {
+    texMathFlowClosed?: boolean | undefined;
   }
 }
 
@@ -122,16 +129,18 @@ const texMathText: Construct = {
 type Marker = readonly [first: number, second: number];
 
 /**
- * A line holding only the `open` marker, up to one holding only the `close`
- * marker. Like a code fence, it must close; an unfinished formula (a reply still
- * streaming) stays prose.
+ * A line holding only the `open` marker, then lines up to one holding only the
+ * `close` marker. Like a fenced code block, it runs to its closing line or the
+ * end of its container; an unclosed block is shown as source.
  */
 const tokenizeTexMathFlow = (open: Marker, close: Marker): Tokenizer =>
   function (effects, ok, nok) {
+    const interrupting = this.interrupt;
     const nonLazyLine: Construct = {
       partial: true,
       tokenize(this: TokenizeContext, effects, ok, nok) {
         return (code) => {
+          if (code === null) return nok(code);
           effects.enter("lineEnding");
           effects.consume(code);
           effects.exit("lineEnding");
@@ -139,11 +148,11 @@ const tokenizeTexMathFlow = (open: Marker, close: Marker): Tokenizer =>
         };
       },
     };
-    const fenceLine = (marker: Marker): Construct => ({
+    const closingFence: Construct = {
       partial: true,
       tokenize(effects, ok, nok) {
         return function start(code) {
-          effects.enter("texMathFlowFence");
+          effects.enter("texMathFlowClosingFence");
           return indent(code);
         };
 
@@ -152,10 +161,10 @@ const tokenizeTexMathFlow = (open: Marker, close: Marker): Tokenizer =>
             effects.consume(code);
             return indent;
           }
-          if (code !== marker[0]) return nok(code);
+          if (code !== close[0]) return nok(code);
           effects.consume(code);
           return function second(code) {
-            if (code !== marker[1]) return nok(code);
+            if (code !== close[1]) return nok(code);
             effects.consume(code);
             return fenceEnd;
           };
@@ -167,13 +176,11 @@ const tokenizeTexMathFlow = (open: Marker, close: Marker): Tokenizer =>
             return fenceEnd;
           }
           if (code !== null && !isLineEnding(code)) return nok(code);
-          effects.exit("texMathFlowFence");
+          effects.exit("texMathFlowClosingFence");
           return ok(code);
         }
       },
-    });
-    const closingFence = fenceLine(close);
-    const openingFence = fenceLine(open);
+    };
 
     return function start(code) {
       effects.enter("texMathFlow");
@@ -186,29 +193,28 @@ const tokenizeTexMathFlow = (open: Marker, close: Marker): Tokenizer =>
       };
     };
 
+    // Only the opening line can fail. Past it the block ends in `ok`, closed or
+    // not. Checking whether the line interrupts a paragraph stops there too.
     function openEnd(code: Code): State | undefined {
       if (isSpace(code)) {
         effects.consume(code);
         return openEnd;
       }
-      if (!isLineEnding(code)) return nok(code);
+      if (code !== null && !isLineEnding(code)) return nok(code);
       effects.exit("texMathFlowFence");
-      return effects.attempt(nonLazyLine, lineStart, nok)(code);
+      return interrupting ? ok(code) : lineEnd(code);
+    }
+
+    function lineEnd(code: Code): State | undefined {
+      return effects.attempt(nonLazyLine, lineStart, finish)(code);
     }
 
     function lineStart(code: Code): State | undefined {
-      return effects.attempt(closingFence, finish, notOpening)(code);
-    }
-
-    // Another opener cannot be inside a formula. Giving up at it keeps a run of
-    // unclosed openers linear.
-    function notOpening(code: Code): State | undefined {
-      return effects.attempt(openingFence, nok, content)(code);
+      return effects.attempt(closingFence, finish, content)(code);
     }
 
     function content(code: Code): State | undefined {
-      if (code === null) return nok(code);
-      if (isLineEnding(code)) return effects.attempt(nonLazyLine, lineStart, nok)(code);
+      if (code === null || isLineEnding(code)) return lineEnd(code);
       effects.enter("texMathFlowValue");
       return value(code);
     }
@@ -216,7 +222,7 @@ const tokenizeTexMathFlow = (open: Marker, close: Marker): Tokenizer =>
     function value(code: Code): State | undefined {
       if (code === null || isLineEnding(code)) {
         effects.exit("texMathFlowValue");
-        return content(code);
+        return lineEnd(code);
       }
       effects.consume(code);
       return value;
@@ -250,8 +256,7 @@ export const texMathFromMarkdown: FromMarkdownExtension = {
       this.enter({ type: "inlineMath", value: "", data: { hName: "code" } } as never, token);
       this.buffer();
     },
-    texMathFlow(token) {
-      this.enter({ type: "math", value: "", data: { hName: "pre" } } as never, token);
+    texMathFlow() {
       this.buffer();
     },
   },
@@ -279,29 +284,48 @@ export const texMathFromMarkdown: FromMarkdownExtension = {
       node.data.hChildren = [{ type: "text", value }];
       this.exit(token);
     },
+    texMathFlowClosingFence() {
+      this.data.texMathFlowClosed = true;
+    },
     texMathFlow(token) {
+      const closed = this.data.texMathFlowClosed;
+      this.data.texMathFlowClosed = undefined;
       const value = this.resume()
         .replace(/\r\n?/g, "\n")
         .replace(/^\n|\n$/g, "");
-      const node = this.stack.at(-1) as unknown as {
-        value: string;
-        data: Record<string, unknown>;
-      };
-      node.value = value;
-      node.data.hChildren = [
+      if (!closed) {
+        // Not a formula: a plain code node that keeps its opener line.
+        const opener = this.sliceSerialize(token).slice(0, 2);
+        this.enter(
+          { type: "code", lang: null, meta: null, value: value ? `${opener}\n${value}` : opener },
+          token,
+        );
+        this.exit(token);
+        return;
+      }
+      this.enter(
         {
-          type: "element",
-          tagName: "code",
-          properties: { className: ["language-math-display"] },
-          children: [{ type: "text", value }],
-        },
-      ];
+          type: "math",
+          value,
+          data: {
+            hName: "pre",
+            hChildren: [
+              {
+                type: "element",
+                tagName: "code",
+                properties: { className: ["language-math-display"] },
+                children: [{ type: "text", value }],
+              },
+            ],
+          },
+        } as never,
+        token,
+      );
       this.exit(token);
     },
   },
 };
 
-/** unified plugin: registers both extensions on the remark-parse processor. */
 export const remarkTexMath = function (this: Processor) {
   const data = this.data() as {
     micromarkExtensions?: MicromarkExtension[];
