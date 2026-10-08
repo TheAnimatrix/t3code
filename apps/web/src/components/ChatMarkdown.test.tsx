@@ -2,24 +2,33 @@
 
 import { EnvironmentId, type AuthEnvironmentScope } from "@t3tools/contracts";
 import { act, type ComponentProps, type ReactNode } from "react";
+import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { create, type ReactTestRenderer } from "react-test-renderer";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import { getSyntaxHighlighterPromise } from "../lib/syntaxHighlighting";
+import {
+  chatMarkdownClipboardPayload,
+  serializeTableElementToCsv,
+  serializeTableElementToMarkdown,
+} from "../markdown-clipboard";
 import { GitHubIcon } from "./Icons";
 import { Button } from "./ui/button";
 import { setMarkdownTaskChecked } from "./files/filePreviewMode";
 
 vi.mock("@effect/atom-react", () => ({ useAtomValue: () => null }));
 vi.mock("../hooks/useTheme", () => ({ useTheme: () => ({ resolvedTheme: "dark" }) }));
+const settingsOverrides = vi.hoisted(() => ({}) as Record<string, unknown>);
 vi.mock("../hooks/useSettings", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../hooks/useSettings")>();
-  const settings = actual.getClientSettings();
+  const defaults = actual.getClientSettings();
   return {
     ...actual,
-    useClientSettings: (select?: (value: typeof settings) => unknown) =>
-      select ? select(settings) : settings,
+    useClientSettings: (select?: (value: typeof defaults) => unknown) => {
+      const settings = { ...defaults, ...settingsOverrides };
+      return select ? select(settings) : settings;
+    },
   };
 });
 vi.mock("./ui/tooltip", async () => {
@@ -1032,5 +1041,270 @@ describe("ChatMarkdown Windows file links", () => {
     expect(html).not.toContain("javascript:");
     expect(html).not.toContain("d:alert");
     expect(html).not.toContain("chat-markdown-file-link");
+  });
+});
+
+describe("ChatMarkdown math", () => {
+  // A real assistant reply: `\(…\)` inline, including table cells, and `\[` / `\]` on their own lines.
+  const reply = [
+    "**Your revised \\(G\\) value is reproducible.** Starting from the printed mean free path:",
+    "",
+    "\\[",
+    "r_1=3.88781\\times10^{-5}\\frac{5772}{6000}",
+    "=3.74007322\\times10^{-5}\\ \\mathrm m.",
+    "\\]",
+    "",
+    "| Quantity | Calculated | Accepted |",
+    "|---|---:|---:|",
+    "| \\(G\\) | \\(6.74731\\times10^{-11}\\) | \\(6.67430\\times10^{-11}\\) |",
+    "",
+    "Your equations imply",
+    "",
+    "\\[",
+    "\\sigma\\propto\\frac{1}{r_1T^4},\\qquad r_1\\propto T",
+    "\\quad\\Rightarrow\\quad \\sigma\\propto T^{-5}.",
+    "\\]",
+  ].join("\n");
+
+  async function renderMath(
+    text: string,
+    props: Partial<ComponentProps<typeof ChatMarkdown>> = {},
+  ) {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    // KaTeX loads lazily; having the module already resolved lets its Suspense boundaries settle.
+    await import("./chat/KatexMath");
+    const container = document.createElement("div");
+    const root = createRoot(container);
+    await act(async () => {
+      root.render(<ChatMarkdown cwd="/tmp/project" text={text} {...props} />);
+    });
+    const tex = (selector: string) =>
+      [...container.querySelectorAll(selector)].map(
+        (node) => node.querySelector('annotation[encoding="application/x-tex"]')?.textContent,
+      );
+    return { container, tex, unmount: () => act(async () => root.unmount()) };
+  }
+
+  it("renders \\(…\\) and \\[…\\] as math when math rendering is enabled", async () => {
+    settingsOverrides.mathRenderingEnabled = true;
+    const view = await renderMath(reply);
+    try {
+      expect(view.tex(".katex-display")).toEqual([
+        "r_1=3.88781\\times10^{-5}\\frac{5772}{6000}\n=3.74007322\\times10^{-5}\\ \\mathrm m.",
+        "\\sigma\\propto\\frac{1}{r_1T^4},\\qquad r_1\\propto T\n\\quad\\Rightarrow\\quad \\sigma\\propto T^{-5}.",
+      ]);
+      expect(view.tex("td .katex")).toEqual([
+        "G",
+        "6.74731\\times10^{-11}",
+        "6.67430\\times10^{-11}",
+      ]);
+      expect(view.container.querySelector("strong .katex")).not.toBeNull();
+    } finally {
+      await view.unmount();
+      delete settingsOverrides.mathRenderingEnabled;
+    }
+  });
+
+  it.each([true, false])("renders math with parseRawHtml=%s", async (parseRawHtml) => {
+    settingsOverrides.mathRenderingEnabled = true;
+    const view = await renderMath("Inline \\(a_1\\) here.\n\n\\[\nb^2\n\\]", {
+      parseRawHtml,
+      lineBreaks: !parseRawHtml,
+    });
+    try {
+      expect(view.tex(".katex")).toEqual(["a_1", "b^2"]);
+    } finally {
+      await view.unmount();
+      delete settingsOverrides.mathRenderingEnabled;
+    }
+  });
+
+  it("keeps code, escapes, currency, and unfinished formulas as written", async () => {
+    settingsOverrides.mathRenderingEnabled = true;
+    const view = await renderMath(
+      [
+        "Costs $5 and $10, and `\\(x\\)` stays code, as does \\\\(y\\\\).",
+        "",
+        "```tex",
+        "\\[",
+        "z",
+        "\\]",
+        "```",
+        "",
+        "Still streaming \\(w and a [link](https://x.test/a_\\(b\\))",
+      ].join("\n"),
+    );
+    try {
+      expect(view.container.querySelector(".katex")).toBeNull();
+      expect(view.container.querySelector("code")?.textContent).toBe("\\(x\\)");
+      expect(view.container.querySelector("pre code")?.textContent).toBe("\\[\nz\n\\]\n");
+      expect(view.container.textContent).toContain("Costs $5 and $10");
+      expect(view.container.querySelector("a")?.getAttribute("href")).toBe("https://x.test/a_(b)");
+    } finally {
+      await view.unmount();
+      delete settingsOverrides.mathRenderingEnabled;
+    }
+  });
+
+  it("shows the source of TeX that KaTeX rejects and copies formulas as TeX", async () => {
+    settingsOverrides.mathRenderingEnabled = true;
+    const view = await renderMath("Good \\(x^2\\), bad \\(\\frac{1\\).");
+    try {
+      expect(view.tex(".katex")).toEqual(["x^2"]);
+      const copies = [...view.container.querySelectorAll("[data-markdown-copy]")].map((node) =>
+        node.getAttribute("data-markdown-copy"),
+      );
+      expect(copies).toEqual(["\\(x^2\\)", "\\(\\frac{1\\)"]);
+      expect(view.container.querySelector("code")?.textContent).toBe("\\frac{1");
+    } finally {
+      await view.unmount();
+      delete settingsOverrides.mathRenderingEnabled;
+    }
+  });
+
+  describe("clipboard", () => {
+    const displayTex = "r_1=3.88781\\times10^{-5}\\frac{5772}{6000}\n=3.74\\ \\mathrm m.";
+    const source = `Intro \\(a_1\\) text.\n\n\\[\n${displayTex}\n\\]\n\nOutro.`;
+
+    async function copyFrom(select: (container: HTMLElement, range: Range) => void) {
+      settingsOverrides.mathRenderingEnabled = true;
+      const view = await renderMath(source);
+      const range = document.createRange();
+      select(view.container, range);
+      const selection = { rangeCount: 1, getRangeAt: () => range } as unknown as Selection;
+      const payload = chatMarkdownClipboardPayload(selection);
+      await view.unmount();
+      delete settingsOverrides.mathRenderingEnabled;
+      return payload;
+    }
+
+    it.each([
+      [
+        "the whole formula",
+        (c: HTMLElement, r: Range) =>
+          r.selectNode(c.querySelector(".katex-display")!.parentElement!),
+      ],
+      [
+        "the formula's contents",
+        (c: HTMLElement, r: Range) =>
+          r.selectNodeContents(c.querySelector(".katex-display")!.parentElement!),
+      ],
+      [
+        "its visible .katex-html",
+        (c: HTMLElement, r: Range) =>
+          r.selectNodeContents(c.querySelector(".katex-display .katex-html")!),
+      ],
+      [
+        "one glyph run inside it",
+        (c: HTMLElement, r: Range) =>
+          r.selectNodeContents(c.querySelector(".katex-display .katex-html .base")!),
+      ],
+      [
+        "an inline formula's .katex-html",
+        (c: HTMLElement, r: Range) => r.selectNodeContents(c.querySelector("p .katex-html")!),
+      ],
+    ])("copies the TeX when %s is selected", async (name, select) => {
+      const payload = await copyFrom(select);
+      expect(payload?.text).toBe(
+        name === "an inline formula's .katex-html" ? "\\(a_1\\)" : `\\[\n${displayTex}\n\\]`,
+      );
+      // The rich flavor is the same source, never KaTeX's hidden MathML or its glyph soup.
+      expect(payload?.html).not.toMatch(/katex|annotation|<math/);
+      expect(payload?.html).toContain("<code>");
+    });
+
+    it("keeps one coherent copy when a selection spans prose and formulas", async () => {
+      const payload = await copyFrom((container, range) => {
+        range.setStartBefore(container.querySelector("p")!);
+        range.setEndAfter(container.lastElementChild!);
+      });
+      expect(payload?.text).toBe(`Intro \\(a_1\\) text.\n\n\\[\n${displayTex}\n\\]\n\nOutro.`);
+      expect(payload?.html).not.toMatch(/katex|annotation|<math/);
+      expect(payload?.html).toContain("Outro.");
+    });
+  });
+
+  it("copies table math as TeX in CSV and Markdown while ordinary cells stay as before", async () => {
+    settingsOverrides.mathRenderingEnabled = true;
+    const view = await renderMath(
+      "| Quantity | Value |\n|---|---|\n| \\(G\\) | \\(6.7\\times10^{-11}\\) |\n| **bold**, plain | so \\(\\sigma\\) here |",
+    );
+    try {
+      const table = view.container.querySelector("table")!;
+      expect(serializeTableElementToCsv(table)).toBe(
+        'Quantity,Value\n\\(G\\),\\(6.7\\times10^{-11}\\)\n"bold, plain",so \\(\\sigma\\) here',
+      );
+      expect(serializeTableElementToMarkdown(table)).toContain(
+        "| \\(G\\) | \\(6.7\\times10^{-11}\\) |",
+      );
+    } finally {
+      await view.unmount();
+      delete settingsOverrides.mathRenderingEnabled;
+    }
+  });
+
+  it("keeps code that only looks like math as code while math rendering is on", async () => {
+    settingsOverrides.mathRenderingEnabled = true;
+    const view = await renderMath(
+      [
+        "```math-inline",
+        "a_1",
+        "```",
+        "",
+        "```math-display",
+        "b^2",
+        "```",
+        "",
+        '<code class="language-math-inline">c^3</code> and <span><code class="language-math-inline">d^4</code></span>',
+        "",
+        '<pre><code class="language-math-display">e^5</code></pre>',
+        "",
+        "Real \\(f\\).",
+      ].join("\n"),
+    );
+    try {
+      expect(view.tex(".katex")).toEqual(["f"]);
+      const code = view.container.textContent ?? "";
+      for (const source of ["a_1", "b^2", "c^3", "d^4", "e^5"]) expect(code).toContain(source);
+    } finally {
+      await view.unmount();
+      delete settingsOverrides.mathRenderingEnabled;
+    }
+  });
+
+  it("points task checkboxes at their own source after math", async () => {
+    settingsOverrides.mathRenderingEnabled = true;
+    const text = "Do \\(a\\) first:\n\n\\[\nb\n\\]\n\n- [ ] one \\(c\\)\n- [x] two";
+    const view = await renderMath(text);
+    try {
+      const markers = [...view.container.querySelectorAll("li")].map((item) => {
+        const offset = Number(item.getAttribute("data-task-marker-offset"));
+        return text.slice(offset, offset + 3);
+      });
+      expect(markers).toEqual(["[ ]", "[x]"]);
+    } finally {
+      await view.unmount();
+      delete settingsOverrides.mathRenderingEnabled;
+    }
+  });
+
+  it("does not typeset math-classed raw HTML while math rendering is off", async () => {
+    const view = await renderMath('<code class="language-math-inline">x^2</code>');
+    try {
+      expect(view.container.querySelector(".katex")).toBeNull();
+      expect(view.container.querySelector("code")?.textContent).toBe("x^2");
+    } finally {
+      await view.unmount();
+    }
+  });
+
+  it("leaves the source as ordinary Markdown while math rendering is off", async () => {
+    const view = await renderMath(reply);
+    try {
+      expect(view.container.querySelector(".katex")).toBeNull();
+      expect(view.container.textContent).toContain("(G)");
+    } finally {
+      await view.unmount();
+    }
   });
 });

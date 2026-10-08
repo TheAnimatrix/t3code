@@ -346,6 +346,17 @@ export function serializeTableElementToMarkdown(table: Element): string {
   return serializeTable(table).trim();
 }
 
+/** A cell's text, with each formula as its TeX instead of KaTeX's glyph and MathML text. */
+function csvCellText(cell: Element): string {
+  if (!cell.querySelector(".katex")) return cell.textContent ?? "";
+  const copy = cell.cloneNode(true) as Element;
+  for (const wrapper of copy.querySelectorAll("[data-markdown-copy]")) {
+    if (mathWrapperOf(wrapper))
+      wrapper.replaceWith(wrapper.getAttribute("data-markdown-copy")?.trim() ?? "");
+  }
+  return copy.textContent ?? "";
+}
+
 function csvCell(value: string): string {
   const normalized = value.replace(/\s+/g, " ").trim();
   return /[",\n]/.test(normalized) ? `"${normalized.replaceAll('"', '""')}"` : normalized;
@@ -359,12 +370,35 @@ export function serializeTableElementToCsv(table: Element): string {
       (cell) => cell.tagName === "TH" || cell.tagName === "TD",
     );
     if (cells.length === 0) continue;
-    lines.push(cells.map((cell) => csvCell(cell.textContent ?? "")).join(","));
+    lines.push(cells.map((cell) => csvCell(csvCellText(cell))).join(","));
   }
   return lines.join("\n");
 }
 
+/**
+ * A rendered formula (`data-markdown-copy` around KaTeX's `.katex`) pastes as
+ * its TeX source. KaTeX's visible half is `aria-hidden` and its MathML half
+ * carries the TeX a second time, so neither survives into a paste target
+ * without the stylesheet.
+ */
+function mathWrapperOf(element: Element | null): Element | null {
+  const wrapper = element?.closest("[data-markdown-copy]") ?? null;
+  return wrapper?.querySelector(".katex") ? wrapper : null;
+}
+
+function mathSourceElement(wrapper: Element): Element {
+  const code = document.createElement("code");
+  code.textContent = wrapper.getAttribute("data-markdown-copy")?.trim() ?? "";
+  if (!wrapper.querySelector(".katex-display")) return code;
+  const pre = document.createElement("pre");
+  pre.append(code);
+  return pre;
+}
+
 function sanitizedHtmlFrom(container: Element): string {
+  for (const wrapper of container.querySelectorAll("[data-markdown-copy]")) {
+    if (mathWrapperOf(wrapper)) wrapper.replaceWith(mathSourceElement(wrapper));
+  }
   for (const node of container.querySelectorAll(SANITIZED_HTML_SELECTOR)) {
     if (
       node.classList.contains("chat-markdown-file-link") ||
@@ -393,6 +427,14 @@ export function chatMarkdownClipboardPayload(
     const ancestor = range.commonAncestorContainer;
     const ancestorElement =
       ancestor.nodeType === Node.ELEMENT_NODE ? (ancestor as Element) : ancestor.parentElement;
+    // A range inside one formula clones only KaTeX's glyph markup, which has lost
+    // the wrapper that knows the TeX.
+    const math = mathWrapperOf(ancestorElement);
+    if (math) {
+      texts.push(math.getAttribute("data-markdown-copy")?.trim() ?? "");
+      htmls.push(`<meta charset="utf-8">${mathSourceElement(math).outerHTML}`);
+      continue;
+    }
     if (ancestorElement?.closest("pre")) {
       const text = range.toString();
       if (text) {

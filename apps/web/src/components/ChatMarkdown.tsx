@@ -90,11 +90,13 @@ import { parseAssistantCitationHref } from "@t3tools/shared/assistantCitations";
 import { parseComposerContextHref } from "@t3tools/shared/composerContextReferences";
 import { parseThreadLinkHref, THREAD_LINK_PROTOCOL } from "@t3tools/shared/threadLinks";
 import { AssistantCitationChip } from "./chat/AssistantCitationChip";
+import { MarkdownMath, isTexMath, useMathRendering } from "./chat/MarkdownMath";
 import { MarkdownThreadLink } from "./chat/MarkdownThreadLink";
 import remarkGfm from "remark-gfm";
 import type { Processor } from "unified";
 import { isWindowsAbsolutePath } from "@t3tools/shared/path";
 import { remarkGithubAlerts } from "../markdown-github-alerts";
+import { remarkTexMath } from "../markdown-math";
 import {
   artifactTemplateFromHastProperties,
   CODEX_ARTIFACT_TEMPLATE_HAST_PROPERTIES,
@@ -3404,9 +3406,13 @@ const CHAT_MARKDOWN_COMPONENTS = {
     );
   },
   code: function MarkdownCode({ node, children, className, ...props }) {
-    const { cwd, imageBaseDir, inlineCodeFileLinkMetaByText, fileLinkChip } = use(
+    const { cwd, imageBaseDir, inlineCodeFileLinkMetaByText, fileLinkChip, text } = use(
       ChatMarkdownRendererContext,
     );
+    const mathRendering = useMathRendering();
+    if (mathRendering && isTexMath(node, text, false)) {
+      return <MarkdownMath tex={nodeToPlainText(children)} display={false} />;
+    }
     if (node?.properties?.dataInlineCode != null) {
       const codeText = nodeToPlainText(children);
       const fileLinkMeta =
@@ -3565,9 +3571,13 @@ const CHAT_MARKDOWN_COMPONENTS = {
     const { resolvedTheme, diffThemeName, expandMedia, isStreaming, onRunShellCommand, text } = use(
       ChatMarkdownRendererContext,
     );
+    const mathRendering = useMathRendering();
     const codeBlock = extractCodeBlock(children);
     if (!codeBlock) {
       return <pre {...props}>{children}</pre>;
+    }
+    if (mathRendering && isTexMath(node, text, true)) {
+      return <MarkdownMath tex={codeBlock.code} display />;
     }
 
     const language = extractFenceLanguage(codeBlock.className);
@@ -3643,17 +3653,22 @@ function ChatMarkdown({
     localMediaPreview,
     setLocalMediaPreview,
   } = useChatMarkdownState({ text, ...props });
+  // Off by default; when on, only text that could hold `\(` or `\[` pays for the math syntax.
+  const parseMath = useMathRendering() && /\\[([]/.test(text);
+  // The incremental parser reuses a cached prefix and does not know about extra syntax.
   const incrementalParsing =
     props.isStreaming === true &&
     extraRemarkPlugins.length === 0 &&
+    !parseMath &&
     /(?:^|\n) {0,3}(?:`{3}|~{3})/.test(text);
   const remarkPlugins = useMemo(
     () => [
       ...(lineBreaks ? CHAT_MARKDOWN_REMARK_PLUGINS_WITH_BREAKS : CHAT_MARKDOWN_REMARK_PLUGINS),
       ...extraRemarkPlugins,
+      ...(parseMath ? [remarkTexMath] : []),
       ...(incrementalParsing ? [createIncrementalMarkdownPlugin()] : []),
     ],
-    [extraRemarkPlugins, incrementalParsing, lineBreaks],
+    [extraRemarkPlugins, incrementalParsing, lineBreaks, parseMath],
   );
 
   // react-markdown converts unparsed HTML nodes to text when skipHtml is false.

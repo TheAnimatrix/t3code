@@ -29,6 +29,14 @@ The controls retreat as the composer docks after you send the first message.
 Turn on **Composer context** to keep those controls visible after the thread starts. This preference
 applies to the web and desktop clients.
 
+## Math
+
+Turn on **Render math** to typeset TeX in chat messages and Markdown previews: `\(…\)` for inline
+formulas, and `\[` and `\]` each on their own line around a display formula. Anything else, including
+`$…$` and `\[…\]` on a single line, stays as written. A formula that is unfinished or invalid shows
+its TeX, and copying a formula gives you its TeX. This preference applies to the web and desktop
+clients.
+
 ## Motion
 
 The main sidebar, right panel, and terminal drawer open and close immediately by default. Move the
