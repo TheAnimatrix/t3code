@@ -1060,7 +1060,7 @@ describe("ChatMarkdown Windows file links", () => {
 type CitedParts = { prose: Text[]; formulas: Element[]; html: Element[] };
 
 describe("ChatMarkdown math", () => {
-  // A real assistant reply: `\(…\)` inline, including table cells, and `\[` / `\]` on their own lines.
+  // A real assistant reply.
   const reply = [
     "**Your revised \\(G\\) value is reproducible.** Starting from the printed mean free path:",
     "",
@@ -1086,7 +1086,7 @@ describe("ChatMarkdown math", () => {
     props: Partial<ComponentProps<typeof ChatMarkdown>> = {},
   ) {
     vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-    // KaTeX loads lazily; having the module already resolved lets its Suspense boundaries settle.
+    // Resolving the lazy KaTeX module first lets its Suspense boundaries settle.
     await import("./chat/KatexMath");
     const container = document.createElement("div");
     const root = createRoot(container);
@@ -1131,6 +1131,26 @@ describe("ChatMarkdown math", () => {
     } finally {
       await view.unmount();
       delete settingsOverrides.mathRenderingEnabled;
+    }
+  });
+
+  it("renders a $$ block as math when enabled and keeps it as written when disabled", async () => {
+    const source = "Before.\n\n$$\nb^2\n$$\n\nAfter.";
+    settingsOverrides.mathRenderingEnabled = true;
+    const enabled = await renderMath(source);
+    try {
+      expect(enabled.tex(".katex-display")).toEqual(["b^2"]);
+      expect(enabled.container.textContent).not.toContain("$$");
+    } finally {
+      await enabled.unmount();
+      delete settingsOverrides.mathRenderingEnabled;
+    }
+    const disabled = await renderMath(source);
+    try {
+      expect(disabled.container.querySelector(".katex")).toBeNull();
+      expect(disabled.container.textContent).toContain("$$\nb^2\n$$");
+    } finally {
+      await disabled.unmount();
     }
   });
 
@@ -1223,7 +1243,7 @@ describe("ChatMarkdown math", () => {
       expect(payload?.text).toBe(
         name === "an inline formula's .katex-html" ? "\\(a_1\\)" : `\\[\n${displayTex}\n\\]`,
       );
-      // The rich flavor is the same source, never KaTeX's hidden MathML or its glyph soup.
+      // The HTML flavor carries the TeX, not KaTeX's markup.
       expect(payload?.html).not.toMatch(/katex|annotation|<math/);
       expect(payload?.html).toContain("<code>");
     });
@@ -1334,7 +1354,7 @@ describe("ChatMarkdown math", () => {
         const captured = view.capture((range) => select(range, parts));
         expect(captured?.selector.text).toBe(quote);
 
-        // The saved quote resolves to what is on screen: whole formulas, never KaTeX's glyph nodes.
+        // The quote resolves to whole formulas, never KaTeX's glyph nodes.
         const found = resolveAssistantCitationRange(view.container, captured!.selector);
         const expected = document.createRange();
         visible(expected, parts);
@@ -1361,7 +1381,7 @@ describe("ChatMarkdown math", () => {
       );
       try {
         const whole = view.capture((range) => range.selectNodeContents(view.container));
-        // The file chip is a control, so its label stays out, and the link itself is not a formula.
+        // The file chip is a control, so its label stays out.
         expect(whole?.selector.text.replace(/\s+/g, " ")).toBe(
           "Intro \\(a_1\\) text. \\[ r=1 \\] See Report \\(x\\) notes and code. Outro.",
         );
@@ -1459,11 +1479,10 @@ describe("ChatMarkdown math", () => {
     ].join("\n");
     const view = await renderMath(`${table}\n\nOutside a table, \\(\\|x\\|\\) is a norm.`);
     try {
-      // `\|` is the table's escape for a pipe, so the formula holds `|x|`; the third cell's
-      // three backslashes are one `\\` and that escape.
+      // `\|` is the table's escape for a pipe; `\\\|` in the third cell is `\\` then that escape.
       expect(view.tex("td .katex")).toEqual(["|x|", "\\Vert x\\Vert", "a\\\\|b"]);
       expect(view.tex("p .katex")).toEqual(["\\|x\\|"]);
-      // Copying the table escapes the pipes again, so pasting it reads back the same formulas.
+      // Copying the table escapes the pipes again.
       expect(serializeTableElementToMarkdown(view.container.querySelector("table")!)).toBe(table);
     } finally {
       await view.unmount();
@@ -1500,8 +1519,8 @@ describe("ChatMarkdown math", () => {
     }
   });
 
-  // Offsets inside a raw HTML block in a blockquote leave out its `> ` prefixes, so an
-  // authored element can sit where they point at a real `\\(` or `\\[`.
+  // Offsets in a blockquoted raw HTML block skip its `> ` prefixes, so authored
+  // code can land on a real opener.
   it.each([
     ["inline", "> <div>\n> \\(<code>hello</code>\n> </div>"],
     ["display", "> <div>\n> \\[<pre><code>hello</code></pre>\n> </div>"],

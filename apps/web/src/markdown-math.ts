@@ -20,11 +20,10 @@ declare module "micromark-util-types" {
   }
 }
 
-// The two TeX delimiters models write: `\(…\)` inline, and `\[` / `\]` each on
-// their own line for display. CommonMark reads `\(` and `\[` as escapes, so the
-// backslash is gone before any later pass could see it; these constructs run
-// first. Everything else in the chat parser (code spans, fences, links, `$`) is
-// left alone, and `\[x\]` on one line stays prose, which keeps `\[1\]` citations.
+// \(…\) inline, and \[ / \] or $$ on their own lines for display. These run before
+// CommonMark's escape construct, which would otherwise consume \( and \[. A
+// one-line \[x\] stays prose so \[1\] citations do.
+const DOLLAR = 36;
 const BACKSLASH = 92;
 const LEFT_PAREN = 40;
 const RIGHT_PAREN = 41;
@@ -37,9 +36,8 @@ const isLineEnding = (code: Code) => code !== null && code < -2;
 const isSpace = (code: Code) => code === -2 || code === -1 || code === 32;
 
 /**
- * `\(…\)` in running text. A formula never contains a backtick, which would open
- * a code span, or a second `\(`, so a stray opener gives up at the next one and
- * a message full of them is still scanned once.
+ * `\(…\)` in text. Gives up at a backtick (code spans outrank math) or a second
+ * `\(`, so unmatched openers are scanned once.
  */
 const texMathText: Construct = {
   name: "texMathText",
@@ -121,121 +119,131 @@ const texMathText: Construct = {
   },
 };
 
+type Marker = readonly [first: number, second: number];
+
 /**
- * A line holding only `\[`, up to a line holding only `\]`. Like a code fence,
- * it must close; an unfinished formula (a reply still streaming) stays prose.
+ * A line holding only the `open` marker, up to one holding only the `close`
+ * marker. Like a code fence, it must close; an unfinished formula (a reply still
+ * streaming) stays prose.
  */
-const tokenizeTexMathFlow: Tokenizer = function (effects, ok, nok) {
-  const nonLazyLine: Construct = {
-    partial: true,
-    tokenize(this: TokenizeContext, effects, ok, nok) {
-      return (code) => {
-        effects.enter("lineEnding");
-        effects.consume(code);
-        effects.exit("lineEnding");
-        return (next) => (this.parser.lazy[this.now().line] ? nok(next) : ok(next));
-      };
-    },
-  };
-  // A line holding only `\]` closes the formula. A line holding only `\[` can
-  // never be inside one, so giving up there, as the inline construct does at a
-  // second `\(`, keeps a run of unclosed openers linear.
-  const fenceLine = (bracket: number): Construct => ({
-    partial: true,
-    tokenize(effects, ok, nok) {
-      return function start(code) {
-        effects.enter("texMathFlowFence");
-        return indent(code);
-      };
-
-      function indent(code: Code): State | undefined {
-        if (isSpace(code)) {
+const tokenizeTexMathFlow = (open: Marker, close: Marker): Tokenizer =>
+  function (effects, ok, nok) {
+    const nonLazyLine: Construct = {
+      partial: true,
+      tokenize(this: TokenizeContext, effects, ok, nok) {
+        return (code) => {
+          effects.enter("lineEnding");
           effects.consume(code);
-          return indent;
-        }
-        if (code !== BACKSLASH) return nok(code);
-        effects.consume(code);
-        return function second(code) {
-          if (code !== bracket) return nok(code);
-          effects.consume(code);
-          return fenceEnd;
+          effects.exit("lineEnding");
+          return (next) => (this.parser.lazy[this.now().line] ? nok(next) : ok(next));
         };
-      }
-
-      function fenceEnd(code: Code): State | undefined {
-        if (isSpace(code)) {
-          effects.consume(code);
-          return fenceEnd;
-        }
-        if (code !== null && !isLineEnding(code)) return nok(code);
-        effects.exit("texMathFlowFence");
-        return ok(code);
-      }
-    },
-  });
-  const closingFence = fenceLine(RIGHT_BRACKET);
-  const openingFence = fenceLine(LEFT_BRACKET);
-
-  return function start(code) {
-    effects.enter("texMathFlow");
-    effects.enter("texMathFlowFence");
-    effects.consume(code);
-    return function open(code) {
-      if (code !== LEFT_BRACKET) return nok(code);
-      effects.consume(code);
-      return openEnd;
+      },
     };
+    const fenceLine = (marker: Marker): Construct => ({
+      partial: true,
+      tokenize(effects, ok, nok) {
+        return function start(code) {
+          effects.enter("texMathFlowFence");
+          return indent(code);
+        };
+
+        function indent(code: Code): State | undefined {
+          if (isSpace(code)) {
+            effects.consume(code);
+            return indent;
+          }
+          if (code !== marker[0]) return nok(code);
+          effects.consume(code);
+          return function second(code) {
+            if (code !== marker[1]) return nok(code);
+            effects.consume(code);
+            return fenceEnd;
+          };
+        }
+
+        function fenceEnd(code: Code): State | undefined {
+          if (isSpace(code)) {
+            effects.consume(code);
+            return fenceEnd;
+          }
+          if (code !== null && !isLineEnding(code)) return nok(code);
+          effects.exit("texMathFlowFence");
+          return ok(code);
+        }
+      },
+    });
+    const closingFence = fenceLine(close);
+    const openingFence = fenceLine(open);
+
+    return function start(code) {
+      effects.enter("texMathFlow");
+      effects.enter("texMathFlowFence");
+      effects.consume(code);
+      return function second(code) {
+        if (code !== open[1]) return nok(code);
+        effects.consume(code);
+        return openEnd;
+      };
+    };
+
+    function openEnd(code: Code): State | undefined {
+      if (isSpace(code)) {
+        effects.consume(code);
+        return openEnd;
+      }
+      if (!isLineEnding(code)) return nok(code);
+      effects.exit("texMathFlowFence");
+      return effects.attempt(nonLazyLine, lineStart, nok)(code);
+    }
+
+    function lineStart(code: Code): State | undefined {
+      return effects.attempt(closingFence, finish, notOpening)(code);
+    }
+
+    // Another opener cannot be inside a formula. Giving up at it keeps a run of
+    // unclosed openers linear.
+    function notOpening(code: Code): State | undefined {
+      return effects.attempt(openingFence, nok, content)(code);
+    }
+
+    function content(code: Code): State | undefined {
+      if (code === null) return nok(code);
+      if (isLineEnding(code)) return effects.attempt(nonLazyLine, lineStart, nok)(code);
+      effects.enter("texMathFlowValue");
+      return value(code);
+    }
+
+    function value(code: Code): State | undefined {
+      if (code === null || isLineEnding(code)) {
+        effects.exit("texMathFlowValue");
+        return content(code);
+      }
+      effects.consume(code);
+      return value;
+    }
+
+    function finish(code: Code): State | undefined {
+      effects.exit("texMathFlow");
+      return ok(code);
+    }
   };
 
-  function openEnd(code: Code): State | undefined {
-    if (isSpace(code)) {
-      effects.consume(code);
-      return openEnd;
-    }
-    if (!isLineEnding(code)) return nok(code);
-    effects.exit("texMathFlowFence");
-    return effects.attempt(nonLazyLine, lineStart, nok)(code);
-  }
-
-  function lineStart(code: Code): State | undefined {
-    return effects.attempt(closingFence, close, notOpening)(code);
-  }
-
-  function notOpening(code: Code): State | undefined {
-    return effects.attempt(openingFence, nok, content)(code);
-  }
-
-  function content(code: Code): State | undefined {
-    if (code === null) return nok(code);
-    if (isLineEnding(code)) return effects.attempt(nonLazyLine, lineStart, nok)(code);
-    effects.enter("texMathFlowValue");
-    return value(code);
-  }
-
-  function value(code: Code): State | undefined {
-    if (code === null || isLineEnding(code)) {
-      effects.exit("texMathFlowValue");
-      return content(code);
-    }
-    effects.consume(code);
-    return value;
-  }
-
-  function close(code: Code): State | undefined {
-    effects.exit("texMathFlow");
-    return ok(code);
-  }
-};
+const texMathFlow = (open: Marker, close: Marker): Construct => ({
+  name: "texMathFlow",
+  tokenize: tokenizeTexMathFlow(open, close),
+  concrete: true,
+});
 
 export const texMathSyntax: MicromarkExtension = {
   text: { [BACKSLASH]: texMathText },
-  flow: { [BACKSLASH]: { name: "texMathFlow", tokenize: tokenizeTexMathFlow, concrete: true } },
+  flow: {
+    [BACKSLASH]: texMathFlow([BACKSLASH, LEFT_BRACKET], [BACKSLASH, RIGHT_BRACKET]),
+    [DOLLAR]: texMathFlow([DOLLAR, DOLLAR], [DOLLAR, DOLLAR]),
+  },
 };
 
-// The mdast nodes carry the hast shape react-markdown renders, the same one
-// `remark-math` produces: `<code class="language-math-inline">` inline and
-// `<pre><code class="language-math-display">` for display. `language-*` is
-// already allowed by the sanitizer, so no schema change is needed.
+// Inline math renders as `<code class="language-math-inline">`, display math as
+// `<pre><code class="language-math-display">`. The sanitizer already allows `language-*`.
 export const texMathFromMarkdown: FromMarkdownExtension = {
   enter: {
     texMathText(token) {
@@ -258,8 +266,7 @@ export const texMathFromMarkdown: FromMarkdownExtension = {
     },
     texMathText(token) {
       let value = this.resume().replace(/\r\n?/g, "\n");
-      // A table reads `\|` in a cell as a pipe that does not split it, which is how
-      // `mdast-util-gfm-table` treats a code span, so a formula there does the same.
+      // Like a code span, a formula in a table cell reads `\|` as a pipe.
       if (this.data.inTable) {
         value = value.replace(/\\([\\|])/g, (whole, escaped) => (escaped === "|" ? "|" : whole));
       }
@@ -305,10 +312,9 @@ export const remarkTexMath = function (this: Processor) {
 };
 
 /**
- * What identifies a rendered formula to copying and citing (see `mathWrapperOf`):
- * a marker for its kind, and its TeX source as Markdown, which is what copying it
- * should give. Set on the typeset formula and on the source shown in its place,
- * so a formula reads the same before KaTeX loads as after.
+ * Marks a formula for copying and citing (see `mathWrapperOf`), with its
+ * canonical TeX as the copy text. Set on the typeset formula and on the source
+ * shown in its place.
  */
 export function texMathAttributes(tex: string, display: boolean) {
   return {

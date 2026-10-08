@@ -46,6 +46,13 @@ describe("TeX math syntax", () => {
     expect(mathIn("- item\n\n  \\[\n  x^2\n  \\]")).toEqual(["math:x^2"]);
   });
 
+  it("reads $$ lines as display math, keeping lines that look like Markdown or TeX", () => {
+    expect(mathIn("$$\nx\n$$")).toEqual(["math:x"]);
+    expect(mathIn("text\n\n$$\n- a\n\\[\n\n> c\n$$\n\nafter")).toEqual(["math:- a\n\\[\n\n> c"]);
+    expect(mathIn("> $$\n> x\n> $$")).toEqual(["math:x"]);
+    expect(mathIn("- item\n\n  $$\n  x^2\n  $$")).toEqual(["math:x^2"]);
+  });
+
   it.each([
     ["an unclosed inline opener", "costs \\(x and more"],
     ["an empty formula", "\\(\\) text"],
@@ -54,8 +61,15 @@ describe("TeX math syntax", () => {
     ["a fenced block", "```\n\\[\nx\n\\]\n```"],
     ["an indented block", "    \\[\n    x\n    \\]"],
     ["a one-line display formula", "\\[ x \\]"],
+    ["a one-line $$ formula", "$$ x $$"],
+    ["inline $$ in text", "so $$x$$ holds"],
+    ["currency", "Costs $5 and $10"],
+    ["a single $", "$\nx\n$"],
     ["a citation", "see \\[1\\] and \\[2\\]"],
     ["an unclosed display block", "\\[\nx = 1\n"],
+    ["an unclosed $$ block", "$$\nx = 1\n"],
+    ["a $$ block closed by \\]", "$$\na\n\\]"],
+    ["a \\[ block closed by $$", "\\[\na\n$$"],
     ["a display block cut by a lazy line", "> \\[\n> x\nlazy\n> \\]"],
     ["a link target", "[a](https://x.test/\\(b\\))"],
   ])("leaves %s alone", (_, source) => {
@@ -79,6 +93,13 @@ describe("TeX math syntax", () => {
 
   it("scans a message of unmatched display openers in linear time", () => {
     const source = "\\[\nx\n".repeat(3200);
+    const start = performance.now();
+    expect(mathIn(source)).toEqual([]);
+    expect(performance.now() - start).toBeLessThan(1000);
+  });
+
+  it("does not rescan display openers inside an unclosed $$ block", () => {
+    const source = `$$\n${"\\[\nx\n".repeat(3200)}`;
     const start = performance.now();
     expect(mathIn(source)).toEqual([]);
     expect(performance.now() - start).toBeLessThan(1000);

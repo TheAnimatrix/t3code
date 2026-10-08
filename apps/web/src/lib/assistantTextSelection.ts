@@ -139,9 +139,8 @@ const isText = (node: Node): node is Text => node.nodeType === 3;
  * Uses DOM text order, with a line break between HTML blocks and at <br>.
  * Inline markup, including code and links, contributes its displayed text.
  * Controls and subtrees marked hidden/aria-hidden do not contribute. A rendered
- * formula contributes its TeX source once, as one unit, instead of KaTeX's
- * glyphs and MathML. No layout reads, CSS-generated content, or soft-wrap line
- * breaks enter the stream, so reflow cannot move it.
+ * formula contributes its TeX as one unit. No layout reads, CSS-generated
+ * content, or soft-wrap line breaks enter the stream, so reflow cannot move it.
  */
 function readAssistantText(root: HTMLElement) {
   const parts: string[] = [];
@@ -171,9 +170,8 @@ function readAssistantText(root: HTMLElement) {
     if (element.matches(EXCLUDED_SELECTOR)) return;
     const block = element.matches(BLOCK_SELECTOR);
     if (block || element.tagName === "BR") separator = true;
-    const formula = element.matches("[data-markdown-math]") ? mathWrapperOf(element) : null;
-    if (formula) {
-      append(formula, formula.getAttribute("data-markdown-copy")?.trim() ?? "");
+    if (element.matches("[data-markdown-math]")) {
+      append(element, element.getAttribute("data-markdown-copy")?.trim() ?? "");
     } else {
       for (const child of element.childNodes) visit(child);
     }

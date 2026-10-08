@@ -105,7 +105,7 @@ import { parseAssistantCitationHref } from "@t3tools/shared/assistantCitations";
 import { parseComposerContextHref } from "@t3tools/shared/composerContextReferences";
 import { parseThreadLinkHref } from "@t3tools/shared/threadLinks";
 import { AssistantCitationChip } from "./chat/AssistantCitationChip";
-import { MarkdownMath, isTexMath, useMathRendering } from "./chat/MarkdownMath";
+import { MarkdownMath, isTexMath } from "./chat/MarkdownMath";
 import { MarkdownThreadLink } from "./chat/MarkdownThreadLink";
 import { isWindowsAbsolutePath } from "@t3tools/shared/path";
 import { remarkTexMath } from "../markdown-math";
@@ -2424,6 +2424,7 @@ function useChatMarkdownState({
   // synchronously whether to intercept its `_blank`, and a subscription is what
   // makes a persisted "app" apply once settings hydrate after launch.
   const linkTargetPreference = useClientSettings((settings) => settings.browserLinkTarget);
+  const mathRendering = useClientSettings((settings) => settings.mathRenderingEnabled);
   const resolveThreadPullRequest = useCallback(
     (href: string): (ThreadPullRequestKey & { readonly url: string }) | null => {
       if (
@@ -2658,6 +2659,7 @@ function useChatMarkdownState({
       isStreaming,
       linkTargetPreference,
       markdownFileLinkMetaByHref,
+      mathRendering,
       onTaskListChange,
       onUseArtifactTemplate,
       onRunShellCommand,
@@ -2691,6 +2693,7 @@ function useChatMarkdownState({
       isStreaming,
       linkTargetPreference,
       markdownFileLinkMetaByHref,
+      mathRendering,
       onTaskListChange,
       onUseArtifactTemplate,
       onRunShellCommand,
@@ -3096,10 +3099,8 @@ const CHAT_MARKDOWN_COMPONENTS = {
     );
   },
   code: function MarkdownCode({ node, children, className, ...props }) {
-    const { cwd, imageBaseDir, inlineCodeFileLinkMetaByText, fileLinkChip, text } = use(
-      ChatMarkdownRendererContext,
-    );
-    const mathRendering = useMathRendering();
+    const { cwd, imageBaseDir, inlineCodeFileLinkMetaByText, fileLinkChip, mathRendering, text } =
+      use(ChatMarkdownRendererContext);
     if (mathRendering && isTexMath(node, className, text, false)) {
       return <MarkdownMath tex={nodeToPlainText(children)} display={false} />;
     }
@@ -3258,10 +3259,15 @@ const CHAT_MARKDOWN_COMPONENTS = {
     return <MarkdownDetails open={detailsOpen}>{children}</MarkdownDetails>;
   },
   pre: function MarkdownPre({ node, children, ...props }) {
-    const { resolvedTheme, diffThemeName, expandMedia, isStreaming, onRunShellCommand, text } = use(
-      ChatMarkdownRendererContext,
-    );
-    const mathRendering = useMathRendering();
+    const {
+      resolvedTheme,
+      diffThemeName,
+      expandMedia,
+      isStreaming,
+      mathRendering,
+      onRunShellCommand,
+      text,
+    } = use(ChatMarkdownRendererContext);
     const codeBlock = extractCodeBlock(children);
     if (!codeBlock) {
       return <pre {...props}>{children}</pre>;
@@ -3343,9 +3349,8 @@ function ChatMarkdown({
     localMediaPreview,
     setLocalMediaPreview,
   } = useChatMarkdownState({ text, ...props });
-  // Off by default; when on, only text that could hold `\(` or `\[` pays for the math syntax.
-  const parseMath = useMathRendering() && /\\[([]/.test(text);
-  // The incremental parser reuses a cached prefix and does not know about extra syntax.
+  // Only text that can contain a math opener pays for the extra syntax.
+  const parseMath = componentState.mathRendering && /\\[([]|\$\$/.test(text);
   const incrementalParsing =
     props.isStreaming === true &&
     extraRemarkPlugins.length === 0 &&

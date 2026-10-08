@@ -346,7 +346,16 @@ export function serializeTableElementToMarkdown(table: Element): string {
   return serializeTable(table).trim();
 }
 
-/** A cell's text, with each formula as its TeX instead of KaTeX's glyph and MathML text. */
+// The wrapper MarkdownMath puts on every formula it renders. The sanitizer drops
+// the attribute from authored HTML.
+const MATH_SELECTOR = "[data-markdown-math]";
+
+/** The formula wrapper at or above `element`, if any. */
+export function mathWrapperOf(element: Element | null): Element | null {
+  return element?.closest(MATH_SELECTOR) ?? null;
+}
+
+/** A cell's text, with each formula as its TeX. */
 function csvCellText(cell: Element): string {
   if (!cell.querySelector(MATH_SELECTOR)) return cell.textContent ?? "";
   const copy = cell.cloneNode(true) as Element;
@@ -372,25 +381,6 @@ export function serializeTableElementToCsv(table: Element): string {
     lines.push(cells.map((cell) => csvCell(csvCellText(cell))).join(","));
   }
   return lines.join("\n");
-}
-
-/**
- * MarkdownMath marks every formula it renders, typeset or showing its TeX source
- * while KaTeX loads or cannot typeset it, with `data-markdown-math` beside the
- * TeX in `data-markdown-copy`. Authored HTML cannot carry either attribute, as
- * the sanitizer drops them.
- */
-const MATH_SELECTOR = "[data-markdown-math][data-markdown-copy]";
-
-/**
- * A formula pastes as its TeX source. KaTeX's visible half is `aria-hidden` and
- * its MathML half carries the TeX a second time, so neither survives into a
- * paste target without the stylesheet. A wrapper that merely holds a formula,
- * like a file link with math in its label, is not one. Quoting a selection for
- * the composer reads formulas the same way.
- */
-export function mathWrapperOf(element: Element | null): Element | null {
-  return element?.closest(MATH_SELECTOR) ?? null;
 }
 
 function mathSourceElement(wrapper: Element): Element {
@@ -434,8 +424,7 @@ export function chatMarkdownClipboardPayload(
     const ancestor = range.commonAncestorContainer;
     const ancestorElement =
       ancestor.nodeType === Node.ELEMENT_NODE ? (ancestor as Element) : ancestor.parentElement;
-    // A range inside one formula clones only KaTeX's glyph markup, which has lost
-    // the wrapper that knows the TeX.
+    // A range inside a formula would clone only KaTeX's glyphs, not the wrapper holding the TeX.
     const math = mathWrapperOf(ancestorElement);
     if (math) {
       texts.push(math.getAttribute("data-markdown-copy")?.trim() ?? "");

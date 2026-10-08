@@ -31,12 +31,11 @@ applies to the web and desktop clients.
 
 ## Math
 
-Turn on **Render math** to typeset TeX in chat messages and Markdown previews: `\(…\)` for inline
-formulas, and `\[` and `\]` each on their own line around a display formula. Anything else, including
-`$…$` and `\[…\]` on a single line, stays as written. In a table cell a pipe is written `\|`, so
-`\(\|x\|\)` shows |x|; use `\Vert` for a double bar. A formula that is unfinished or invalid shows
-its TeX, and copying a formula gives you its TeX. This preference applies to the web and desktop
-clients.
+Turn on **Render math** to typeset TeX in chat messages and Markdown previews: `\(…\)` inline, and
+`\[` and `\]` or `$$` on their own lines for display. `$…$` and one-line `\[…\]` or `$$…$$` stay as
+written. In a table cell `\|` is a pipe, so use `\Vert` for a double bar. A formula that is invalid
+or unfinished shows its TeX, and copying a formula gives you its TeX. This preference applies to
+the web and desktop clients.
 
 ## Motion
 

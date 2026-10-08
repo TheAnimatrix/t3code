@@ -10,7 +10,7 @@ import {
 } from "../../lib/assistantTextSelection";
 import { chatMarkdownClipboardPayload, serializeTableElementToCsv } from "../../markdown-clipboard";
 
-// Each test gets its own lazy KaTeX chunk, since React keeps a lazy import's outcome for good.
+// React caches a lazy import's outcome, so each test needs its own KaTeX chunk.
 async function loadMarkdownMath(chunk: () => Promise<unknown>) {
   vi.resetModules();
   vi.doMock("./KatexMath", chunk);
@@ -121,7 +121,7 @@ describe("MarkdownMath", () => {
           select((range) => range.selectNodeContents(formulaOf())),
         )?.selector,
         copy: chatMarkdownClipboardPayload(select((range) => range.selectNodeContents(container))),
-        // A drag that covers part of the formula's text, whichever form it is in.
+        // A drag over part of the formula's text.
         partialCopy: chatMarkdownClipboardPayload(
           select((range) => {
             const glyph = document.createTreeWalker(formulaOf(), NodeFilter.SHOW_TEXT).nextNode()!;
@@ -132,7 +132,7 @@ describe("MarkdownMath", () => {
         csv: serializeTableElementToCsv(container.querySelector("table")!),
       });
 
-      // Still loading: the TeX source stands in, and no formula is typeset yet.
+      // While loading, the TeX source stands in.
       expect(container.querySelector(".katex")).toBeNull();
       const pending = snapshot();
       expect(pending.quote?.text).toBe("Energy \\(E=mc^2\\) here.");
@@ -149,7 +149,7 @@ describe("MarkdownMath", () => {
       await act(async () => release());
       expect(container.querySelectorAll(".katex")).toHaveLength(3);
 
-      // The quote saved while loading is the one the typeset formula gives, and finds it.
+      // The quote saved while loading matches the typeset formula.
       expect(snapshot()).toEqual(pending);
       const found = resolveAssistantCitationRange(container, pending.quote!);
       expect([found?.startContainer, found?.startOffset]).toEqual([before, 0]);
