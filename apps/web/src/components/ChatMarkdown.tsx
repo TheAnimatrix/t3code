@@ -3410,7 +3410,7 @@ const CHAT_MARKDOWN_COMPONENTS = {
       ChatMarkdownRendererContext,
     );
     const mathRendering = useMathRendering();
-    if (mathRendering && isTexMath(node, text, false)) {
+    if (mathRendering && isTexMath(node, className, text, false)) {
       return <MarkdownMath tex={nodeToPlainText(children)} display={false} />;
     }
     if (node?.properties?.dataInlineCode != null) {
@@ -3576,7 +3576,7 @@ const CHAT_MARKDOWN_COMPONENTS = {
     if (!codeBlock) {
       return <pre {...props}>{children}</pre>;
     }
-    if (mathRendering && isTexMath(node, text, true)) {
+    if (mathRendering && isTexMath(node, codeBlock.className, text, true)) {
       return <MarkdownMath tex={codeBlock.code} display />;
     }
 

@@ -84,11 +84,16 @@ class SelectionNode {
   matches(selector: string) {
     return selector.split(", ").some((part) => {
       if (!part.startsWith("[")) return part === this.tagName.toLowerCase();
-      const [attribute, value] = part.slice(1, -1).split("=");
-      return (
-        Object.hasOwn(this.attributes, attribute!) &&
-        (value === undefined || this.attributes[attribute!] === value)
-      );
+      return part
+        .slice(1, -1)
+        .split("][")
+        .every((condition) => {
+          const [attribute, value] = condition.split("=");
+          return (
+            Object.hasOwn(this.attributes, attribute!) &&
+            (value === undefined || this.attributes[attribute!] === value)
+          );
+        });
     });
   }
   closest(selector: string): SelectionNode | null {

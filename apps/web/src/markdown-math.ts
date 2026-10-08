@@ -257,7 +257,12 @@ export const texMathFromMarkdown: FromMarkdownExtension = {
       this.config.exit.data!.call(this, token);
     },
     texMathText(token) {
-      const value = this.resume().replace(/\r\n?/g, "\n");
+      let value = this.resume().replace(/\r\n?/g, "\n");
+      // A table reads `\|` in a cell as a pipe that does not split it, which is how
+      // `mdast-util-gfm-table` treats a code span, so a formula there does the same.
+      if (this.data.inTable) {
+        value = value.replace(/\\([\\|])/g, (whole, escaped) => (escaped === "|" ? "|" : whole));
+      }
       const node = this.stack.at(-1) as unknown as {
         value: string;
         data: Record<string, unknown>;
@@ -299,7 +304,15 @@ export const remarkTexMath = function (this: Processor) {
   (data.fromMarkdownExtensions ??= []).push(texMathFromMarkdown);
 };
 
-/** The TeX source of a formula as Markdown, which is what copying it should give. */
-export function texMathCopyText(tex: string, display: boolean): string {
-  return display ? `\\[\n${tex}\n\\]\n\n` : `\\(${tex}\\)`;
+/**
+ * What identifies a rendered formula to copying and citing (see `mathWrapperOf`):
+ * a marker for its kind, and its TeX source as Markdown, which is what copying it
+ * should give. Set on the typeset formula and on the source shown in its place,
+ * so a formula reads the same before KaTeX loads as after.
+ */
+export function texMathAttributes(tex: string, display: boolean) {
+  return {
+    "data-markdown-math": display ? "display" : "inline",
+    "data-markdown-copy": display ? `\\[\n${tex}\n\\]\n\n` : `\\(${tex}\\)`,
+  };
 }

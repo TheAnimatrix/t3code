@@ -1747,7 +1747,9 @@ function MathRenderingRow() {
   return (
     <SettingsRow
       {...searchableSetting("render-math")}
-      description="Typeset TeX in chat as math: \\(…\\) inline, and \\[ and \\] on their own lines for display. Not available on mobile."
+      description={
+        "Typeset TeX in chat as math: \\(…\\) inline, and \\[ and \\] on their own lines for display. Not available on mobile."
+      }
       resetAction={
         settings.mathRenderingEnabled !== DEFAULT_UNIFIED_SETTINGS.mathRenderingEnabled ? (
           <SettingResetButton

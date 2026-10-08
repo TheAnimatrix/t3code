@@ -2,7 +2,7 @@ import katex from "katex";
 import "katex/dist/katex.min.css";
 import type { ReactNode } from "react";
 
-import { texMathCopyText } from "../../markdown-math";
+import { texMathAttributes } from "../../markdown-math";
 
 /**
  * The only module that imports KaTeX and its stylesheet, so both load together
@@ -32,14 +32,14 @@ export default function KatexMath({
   } catch {
     return fallback;
   }
-  const copy = texMathCopyText(tex, display);
+  const attributes = texMathAttributes(tex, display);
   return display ? (
     <div
       className="my-2 max-w-full overflow-x-auto overflow-y-hidden"
-      data-markdown-copy={copy}
+      {...attributes}
       dangerouslySetInnerHTML={{ __html: html }}
     />
   ) : (
-    <span data-markdown-copy={copy} dangerouslySetInnerHTML={{ __html: html }} />
+    <span {...attributes} dangerouslySetInnerHTML={{ __html: html }} />
   );
 }

@@ -33,7 +33,8 @@ applies to the web and desktop clients.
 
 Turn on **Render math** to typeset TeX in chat messages and Markdown previews: `\(…\)` for inline
 formulas, and `\[` and `\]` each on their own line around a display formula. Anything else, including
-`$…$` and `\[…\]` on a single line, stays as written. A formula that is unfinished or invalid shows
+`$…$` and `\[…\]` on a single line, stays as written. In a table cell a pipe is written `\|`, so
+`\(\|x\|\)` shows |x|; use `\Vert` for a double bar. A formula that is unfinished or invalid shows
 its TeX, and copying a formula gives you its TeX. This preference applies to the web and desktop
 clients.
 

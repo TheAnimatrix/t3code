@@ -348,11 +348,10 @@ export function serializeTableElementToMarkdown(table: Element): string {
 
 /** A cell's text, with each formula as its TeX instead of KaTeX's glyph and MathML text. */
 function csvCellText(cell: Element): string {
-  if (!cell.querySelector(".katex")) return cell.textContent ?? "";
+  if (!cell.querySelector(MATH_SELECTOR)) return cell.textContent ?? "";
   const copy = cell.cloneNode(true) as Element;
-  for (const wrapper of copy.querySelectorAll("[data-markdown-copy]")) {
-    if (mathWrapperOf(wrapper))
-      wrapper.replaceWith(wrapper.getAttribute("data-markdown-copy")?.trim() ?? "");
+  for (const wrapper of copy.querySelectorAll(MATH_SELECTOR)) {
+    wrapper.replaceWith(wrapper.getAttribute("data-markdown-copy")?.trim() ?? "");
   }
   return copy.textContent ?? "";
 }
@@ -376,29 +375,36 @@ export function serializeTableElementToCsv(table: Element): string {
 }
 
 /**
- * A rendered formula (`data-markdown-copy` directly around KaTeX's `.katex` or
- * `.katex-display`) pastes as its TeX source. KaTeX's visible half is
- * `aria-hidden` and its MathML half carries the TeX a second time, so neither
- * survives into a paste target without the stylesheet. A wrapper that merely
- * holds a formula, like a file link with math in its label, is not one.
+ * MarkdownMath marks every formula it renders, typeset or showing its TeX source
+ * while KaTeX loads or cannot typeset it, with `data-markdown-math` beside the
+ * TeX in `data-markdown-copy`. Authored HTML cannot carry either attribute, as
+ * the sanitizer drops them.
  */
-function mathWrapperOf(element: Element | null): Element | null {
-  const wrapper = element?.closest("[data-markdown-copy]") ?? null;
-  return wrapper?.querySelector(":scope > .katex, :scope > .katex-display") ? wrapper : null;
+const MATH_SELECTOR = "[data-markdown-math][data-markdown-copy]";
+
+/**
+ * A formula pastes as its TeX source. KaTeX's visible half is `aria-hidden` and
+ * its MathML half carries the TeX a second time, so neither survives into a
+ * paste target without the stylesheet. A wrapper that merely holds a formula,
+ * like a file link with math in its label, is not one. Quoting a selection for
+ * the composer reads formulas the same way.
+ */
+export function mathWrapperOf(element: Element | null): Element | null {
+  return element?.closest(MATH_SELECTOR) ?? null;
 }
 
 function mathSourceElement(wrapper: Element): Element {
   const code = document.createElement("code");
   code.textContent = wrapper.getAttribute("data-markdown-copy")?.trim() ?? "";
-  if (!wrapper.querySelector(".katex-display")) return code;
+  if (wrapper.getAttribute("data-markdown-math") !== "display") return code;
   const pre = document.createElement("pre");
   pre.append(code);
   return pre;
 }
 
 function sanitizedHtmlFrom(container: Element): string {
-  for (const wrapper of container.querySelectorAll("[data-markdown-copy]")) {
-    if (mathWrapperOf(wrapper)) wrapper.replaceWith(mathSourceElement(wrapper));
+  for (const wrapper of container.querySelectorAll(MATH_SELECTOR)) {
+    wrapper.replaceWith(mathSourceElement(wrapper));
   }
   for (const node of container.querySelectorAll(SANITIZED_HTML_SELECTOR)) {
     if (
